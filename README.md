@@ -1,11 +1,12 @@
 # Telegram Chat Heatmap
 
-<!-- Replace USERNAME and REPO in the three badge URLs below -->
-![Heatmaps made](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fabacus.jasoncameron.dev%2Fget%2FUSERNAME.github.io%2FREPO-heatmaps&query=%24.value&label=heatmaps%20made&color=2da44e)
-![Downloads](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fabacus.jasoncameron.dev%2Fget%2FUSERNAME.github.io%2FREPO-downloads&query=%24.value&label=downloads&color=2f81f7)
-![Visits](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fabacus.jasoncameron.dev%2Fget%2FUSERNAME.github.io%2FREPO-visits&query=%24.value&label=visits&color=6e7781)
+![Heatmaps made](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fabacus.jasoncameron.dev%2Fget%2Fnimafo.github.io%2Ffunviz-heatmaps&query=%24.value&label=heatmaps%20made&color=2da44e)
+![Downloads](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fabacus.jasoncameron.dev%2Fget%2Fnimafo.github.io%2Ffunviz-downloads&query=%24.value&label=downloads&color=2f81f7)
+![Visits](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fabacus.jasoncameron.dev%2Fget%2Fnimafo.github.io%2Ffunviz-visits&query=%24.value&label=visits&color=6e7781)
 
 Turn a Telegram chat export into a GitHub-style contribution heatmap: one square per day, coloured by how many messages you exchanged.
+
+**Live:** https://nimafo.github.io/funviz/
 
 **Everything runs in your browser.** Your chat file is never uploaded anywhere.
 
@@ -16,7 +17,7 @@ Turn a Telegram chat export into a GitHub-style contribution heatmap: one square
 1. Install [Telegram Desktop](https://desktop.telegram.org/). The phone apps can't export.
 2. Open a chat → **⋮** (top right) → **Export chat history**.
 3. Untick all media, set **Format → Machine-readable JSON**, and set the date range to start from the oldest message.
-4. Open the page and drag in `result.json` from `Downloads/Telegram Desktop/ChatExport_…`.
+4. Open [the page](https://nimafo.github.io/funviz/) and drag in `result.json` from `Downloads/Telegram Desktop/ChatExport_…`.
 5. Pick a colour and a light or dark background, then click **Download PNG**.
 
 Full-account exports (Settings → Advanced → Export Telegram data) also work. You'll get a dropdown with all your chats.
@@ -51,9 +52,9 @@ The page keeps three anonymous counts using the free [Abacus](https://abacus.jas
 The totals are shown at the bottom of the page, and you can also check them directly:
 
 ```
-https://abacus.jasoncameron.dev/get/USERNAME.github.io/REPO-heatmaps
-https://abacus.jasoncameron.dev/get/USERNAME.github.io/REPO-downloads
-https://abacus.jasoncameron.dev/get/USERNAME.github.io/REPO-visits
+https://abacus.jasoncameron.dev/get/nimafo.github.io/funviz-heatmaps
+https://abacus.jasoncameron.dev/get/nimafo.github.io/funviz-downloads
+https://abacus.jasoncameron.dev/get/nimafo.github.io/funviz-visits
 ```
 
 The counter is off when the page is opened locally (`file://` or `localhost`), so testing doesn't inflate it.

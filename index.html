@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Telegram Chat Heatmap</title>
-<meta name="description" content="Turn a Telegram chat export into a GitHub-style contribution heatmap. Runs entirely in your browser.">
+<title>Chat Heatmap · Telegram &amp; WhatsApp</title>
+<meta name="description" content="Turn a Telegram or WhatsApp chat export into a GitHub-style contribution heatmap. Runs entirely in your browser.">
 <style>
   :root {
     --bg: #f6f8fa; --card: #fff; --text: #1f2328; --muted: #656d76;
@@ -30,6 +30,10 @@
     font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; background: #f6f8fa;
     border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; padding: 1px 5px;
   }
+  .tabs { display: inline-flex; background: var(--bg); border: 1px solid var(--border); border-radius: 9px; padding: 3px; gap: 2px; }
+  .tab { border: 0; background: transparent; padding: 5px 14px; border-radius: 7px; font-weight: 600; color: var(--muted); }
+  .tab.active { background: #fff; color: var(--text); box-shadow: 0 1px 2px rgba(31,35,40,.12); }
+  .tabpane ol { margin-top: 12px; }
   .note { color: var(--muted); font-size: 13px; margin-top: 10px; }
 
   #drop {
@@ -79,13 +83,17 @@
 <body>
 <main>
   <header>
-    <h1>Telegram Chat Heatmap</h1>
-    <p>Turn a Telegram chat into a GitHub-style heatmap of messages per day. Your file never leaves your browser.</p>
+    <h1>Chat Heatmap</h1>
+    <p>Turn a Telegram or WhatsApp chat into a GitHub-style heatmap of messages per day. Your file never leaves your browser.</p>
   </header>
 
   <section class="card">
-    <details open>
-      <summary>1. Export your chat from Telegram</summary>
+    <h2>1. Export your chat</h2>
+    <div class="tabs" role="tablist">
+      <button class="tab active" data-pane="paneTg" role="tab">Telegram</button>
+      <button class="tab" data-pane="paneWa" role="tab">WhatsApp</button>
+    </div>
+    <div class="tabpane" id="paneTg">
       <ol>
         <li>Install <a href="https://desktop.telegram.org/" target="_blank" rel="noopener">Telegram Desktop</a> (the phone apps can't export).</li>
         <li>Open the chat you want and click <kbd>⋮</kbd> in the top-right corner → <b>Export chat history</b>.</li>
@@ -94,16 +102,27 @@
         <li>Make sure the date range is <b>From: the oldest message</b>, then click <b>Export</b>.</li>
         <li>Find <code>result.json</code> in <code>Downloads/Telegram Desktop/ChatExport_…</code>.</li>
       </ol>
-      <p class="note">A full-account export (Settings → Advanced → Export Telegram data, JSON) works too. You'll get a list of chats to choose from.</p>
-    </details>
+      <p class="note">A full-account export (Settings → Advanced → Export Telegram data, JSON) works too, even if it's many GB. You'll get a list of chats to choose from.</p>
+    </div>
+    <div class="tabpane hidden" id="paneWa">
+      <ol>
+        <li>Open the chat in WhatsApp on your phone.</li>
+        <li><b>iPhone:</b> tap the contact or group name at the top → scroll down → <b>Export Chat</b>.<br>
+            <b>Android:</b> tap <kbd>⋮</kbd> → <b>More</b> → <b>Export chat</b>.</li>
+        <li>Choose <b>Without media</b>.</li>
+        <li>Save the file (e.g. to Files or Drive, or send it to yourself). iPhone makes a <code>.zip</code> and Android a <code>.txt</code>. Both work, no need to unzip.</li>
+        <li>Open this page and pick the file. It works on your phone too.</li>
+      </ol>
+      <p class="note">Group chats work too. Only messages are counted. System notices like "X joined" are skipped.</p>
+    </div>
   </section>
 
   <section class="card">
-    <h2>2. Drop <code>result.json</code> here</h2>
+    <h2>2. Drop your export here</h2>
     <div id="drop" tabindex="0">
-      <strong>Drag &amp; drop result.json</strong>
+      <strong>Drag &amp; drop <code>result.json</code>, or a WhatsApp <code>.txt</code> / <code>.zip</code></strong>
       <span>or click to choose a file · processed locally, nothing is uploaded</span>
-      <input id="file" type="file" accept=".json,application/json" hidden>
+      <input id="file" type="file" accept=".json,.txt,.zip,application/json,text/plain,application/zip" hidden>
     </div>
     <div id="status"></div>
     <div class="group hidden" id="chatPick" style="margin-top:10px">
@@ -198,24 +217,184 @@
   };
 
   // ---------- parsing ----------
-  function countChat(chat) {
-    const counts = new Map();
-    for (const m of chat.messages || []) {
-      if (m.type !== "message" || !m.date) continue;
-      const d = m.date.slice(0, 10);
-      counts.set(d, (counts.get(d) || 0) + 1);
+  // Files are read as a stream in chunks, so memory stays small even for multi-GB
+  // exports. Only the dates are extracted; message text is never stored.
+
+  const CHUNK_TAIL = 16384; // bytes of text carried between chunks so no pattern is cut in half
+
+  // Feed a ReadableStream of bytes through `onText(text, isLast)` in decoded chunks.
+  async function pumpText(stream, onText, onBytes) {
+    const reader = stream.getReader();
+    const dec = new TextDecoder("utf-8");
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) { onText(dec.decode(), true); return; }
+      onBytes && onBytes(value.byteLength);
+      onText(dec.decode(value, { stream: true }), false);
     }
-    return { name: chat.name || "Chat", counts };
   }
 
-  function loadJSON(data) {
-    let chats = [];
-    if (Array.isArray(data.messages)) chats = [countChat(data)];
-    else if (data.chats && Array.isArray(data.chats.list)) {
-      chats = data.chats.list.map(countChat).filter(c => c.counts.size)
-        .sort((a, b) => total(b) - total(a));
+  // ---- Telegram (result.json, single chat or full-account export) ----
+  // Chat header: [ "name": "…", ] "type": "…", "id": 123, "messages": [
+  // Message:     "type": "message", "date": "YYYY-MM-DD…"
+  const TG_RE = /(?:"name":\s*("(?:[^"\\]|\\.)*"|null),\s*)?"type":\s*"[\w]+",\s*"id":\s*-?\d+,\s*"messages":\s*\[|"type":\s*"(message|service)",\s*"date":\s*"(\d{4}-\d{2}-\d{2})/g;
+
+  async function parseTelegram(stream, fallbackName, onBytes) {
+    const chats = [];
+    let cur = null, buf = "", sniffed = false;
+    const newChat = (name) => { cur = { name: name || fallbackName, counts: new Map() }; chats.push(cur); };
+
+    await pumpText(stream, (text, last) => {
+      buf += text;
+      if (!sniffed && buf.length) {
+        sniffed = true;
+        const head = buf.trimStart().slice(0, 200).toLowerCase();
+        if (head.startsWith("<!doctype") || head.startsWith("<html"))
+          throw new Error("This is an HTML export. Please export again with Format → Machine-readable JSON.");
+      }
+      const safe = last ? buf.length : buf.length - CHUNK_TAIL;
+      if (safe <= 0) return;
+      TG_RE.lastIndex = 0;
+      let m, keepFrom = Math.max(0, safe);
+      while ((m = TG_RE.exec(buf)) && m.index < safe) {
+        if (m[3]) {
+          if (m[2] === "message") {
+            if (!cur) newChat();
+            cur.counts.set(m[3], (cur.counts.get(m[3]) || 0) + 1);
+          }
+        } else {
+          let name = null;
+          try { name = m[1] ? JSON.parse(m[1]) : null; } catch (_) {}
+          newChat(name || (chats.length ? "Saved Messages" : null));
+        }
+        keepFrom = Math.max(keepFrom, TG_RE.lastIndex);
+      }
+      buf = buf.slice(keepFrom);
+    }, onBytes);
+
+    return chats.filter(c => c.counts.size);
+  }
+
+  // ---- WhatsApp (_chat.txt, or the .zip WhatsApp makes on iPhone) ----
+  // Line formats seen in the wild, e.g.:
+  //   31/12/2023, 22:15 - Name: text              (Android)
+  //   12/31/23, 10:15 PM - Name: text             (Android, US)
+  //   [31/12/2023, 22:15:03] Name: text           (iPhone)
+  //   31.12.23, 22:15 - Name: text                (German locale)
+  const WA_LINE = /^[‎‏﻿]*\[?(\d{1,4})[\/.\-](\d{1,2})[\/.\-](\d{1,4}),?\s+\d{1,2}[:.]\d{2}(?:[:.]\d{2})?(?:[\s ]*[AaPp]\.?\s?[Mm]\.?)?\]?\s*(?:-\s)?(.*)$/;
+
+  async function parseWhatsApp(stream, name, onBytes) {
+    const raw = new Map(); // "a|b|c" -> count, in order of first appearance
+    let buf = "";
+    const handle = (line) => {
+      const m = WA_LINE.exec(line);
+      if (!m) return; // continuation of a multi-line message
+      const rest = m[4];
+      // messages have "Sender: text"; system lines ("X created group", …) don't
+      if (!/^[^:]{1,80}:\s/.test(rest)) return;
+      if (/end-to-end encrypted/i.test(rest)) return;
+      const k = `${m[1]}|${m[2]}|${m[3]}`;
+      raw.set(k, (raw.get(k) || 0) + 1);
+    };
+    await pumpText(stream, (text, last) => {
+      buf += text;
+      const lines = buf.split(/\r?\n/);
+      buf = last ? "" : lines.pop();
+      for (const l of lines) handle(l);
+    }, onBytes);
+
+    const counts = resolveWhatsAppDates(raw);
+    return counts.size ? [{ name, counts }] : [];
+  }
+
+  // Work out whether dates are D/M/Y, M/D/Y or Y/M/D.
+  function resolveWhatsAppDates(raw) {
+    const keys = [...raw.keys()].map(k => k.split("|").map(Number));
+    const orders = [];
+    if (keys.some(([a]) => a > 31)) orders.push([0, 1, 2]); // Y M D
+    else {
+      if (!keys.some(([, b]) => b > 12)) orders.push([2, 1, 0]); // D M Y
+      if (!keys.some(([a]) => a > 12)) orders.push([2, 0, 1]); // M D Y
+      if (!orders.length) orders.push([2, 1, 0]);
     }
-    if (!chats.length) throw new Error("No messages found. Is this a Telegram JSON export?");
+    const toIso = (k, [yi, mi, di]) => {
+      let y = k[yi]; if (y < 100) y += 2000;
+      return `${y}-${String(k[mi]).padStart(2, "0")}-${String(k[di]).padStart(2, "0")}`;
+    };
+    // If still ambiguous, pick the reading where the chat is most chronological.
+    let best = orders[0];
+    if (orders.length > 1) {
+      let bestBad = Infinity;
+      for (const o of orders) {
+        let bad = 0, prev = "";
+        for (const k of keys) { const d = toIso(k, o); if (d < prev) bad++; prev = d; }
+        if (bad < bestBad) { bestBad = bad; best = o; }
+      }
+    }
+    const counts = new Map();
+    const vals = [...raw.values()];
+    keys.forEach((k, i) => {
+      const d = toIso(k, best);
+      if (!isNaN(Date.parse(d + "T00:00:00Z"))) counts.set(d, (counts.get(d) || 0) + vals[i]);
+    });
+    return counts;
+  }
+
+  // ---- minimal ZIP reader: finds the chat .txt inside and streams it out ----
+  async function zipTextEntry(file) {
+    const tailLen = Math.min(file.size, 65557);
+    const tail = new DataView(await file.slice(file.size - tailLen).arrayBuffer());
+    let eocd = -1;
+    for (let i = tailLen - 22; i >= 0; i--) if (tail.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+    if (eocd < 0) throw new Error("This .zip file looks damaged.");
+    const cdSize = tail.getUint32(eocd + 12, true), cdOff = tail.getUint32(eocd + 16, true);
+    if (cdOff === 0xffffffff) throw new Error("This .zip is too large. Please export the chat “Without media”.");
+    const cd = new DataView(await file.slice(cdOff, cdOff + cdSize).arrayBuffer());
+    const entries = [];
+    for (let p = 0; p + 46 <= cd.byteLength && cd.getUint32(p, true) === 0x02014b50;) {
+      const method = cd.getUint16(p + 10, true), csize = cd.getUint32(p + 20, true);
+      const nlen = cd.getUint16(p + 28, true), xlen = cd.getUint16(p + 30, true), clen = cd.getUint16(p + 32, true);
+      const lho = cd.getUint32(p + 42, true);
+      const name = new TextDecoder().decode(new Uint8Array(cd.buffer, cd.byteOffset + p + 46, nlen));
+      entries.push({ name, method, csize, lho });
+      p += 46 + nlen + xlen + clen;
+    }
+    const txt = entries.filter(e => /\.txt$/i.test(e.name) && !/^__MACOSX\//.test(e.name));
+    const e = txt.find(e => /_chat\.txt$/i.test(e.name)) || txt.sort((a, b) => b.csize - a.csize)[0];
+    if (!e) throw new Error("No chat .txt file found inside this .zip.");
+    const lh = new DataView(await file.slice(e.lho, e.lho + 30).arrayBuffer());
+    const start = e.lho + 30 + lh.getUint16(26, true) + lh.getUint16(28, true);
+    const body = file.slice(start, start + e.csize).stream();
+    if (e.method === 0) return { stream: body, size: e.csize };
+    if (e.method === 8) {
+      if (typeof DecompressionStream === "undefined") throw new Error("Your browser can't unzip files. Please unzip it first and drop the .txt file.");
+      return { stream: body.pipeThrough(new DecompressionStream("deflate-raw")), size: e.csize };
+    }
+    throw new Error("Unsupported .zip compression. Please unzip it first and drop the .txt file.");
+  }
+
+  function waNameFromFile(fname) {
+    const m = fname.replace(/\.(txt|zip)$/i, "").match(/WhatsApp Chat (?:with|-|mit|met|avec|con|com)\s*(.+)$/i);
+    return m ? m[1].trim() : "WhatsApp chat";
+  }
+
+  async function parseFile(file, onProgress) {
+    let done = 0;
+    const onBytes = (n) => { done += n; onProgress(done); };
+    const head = new Uint8Array(await file.slice(0, 4).arrayBuffer());
+    if (head[0] === 0x50 && head[1] === 0x4b) { // "PK" → zip
+      const { stream } = await zipTextEntry(file);
+      return parseWhatsApp(stream, waNameFromFile(file.name), null);
+    }
+    const peek = (await file.slice(0, 4096).text()).replace(/^[﻿\s]+/, "");
+    if (peek.startsWith("{")) return parseTelegram(file.stream(), "Chat", onBytes);
+    if (/\.json$/i.test(file.name)) return parseTelegram(file.stream(), "Chat", onBytes);
+    return parseWhatsApp(file.stream(), waNameFromFile(file.name), onBytes);
+  }
+
+  function loadChats(chats) {
+    if (!chats.length) throw new Error("No messages found. Please use a Telegram JSON export or a WhatsApp chat export (.txt or .zip).");
+    chats.sort((a, b) => total(b) - total(a));
     state.chats = chats;
     const sel = $("chatSelect");
     sel.innerHTML = chats.map((c, i) =>
@@ -237,47 +416,92 @@
   // ---------- file input ----------
   const drop = $("drop"), fileInput = $("file");
   function setStatus(msg, err) { $("status").textContent = msg; $("status").classList.toggle("err", !!err); }
+  const mb = (n) => (n / 1048576).toFixed(n < 10485760 ? 1 : 0);
 
-  function readFile(file) {
-    if (!file) return;
-    setStatus(`Reading ${file.name} (${(file.size / 1048576).toFixed(1)} MB)…`);
-    const r = new FileReader();
-    r.onload = () => {
-      try {
-        loadJSON(JSON.parse(r.result));
-        setStatus(`Loaded ${file.name}`);
-        if (!countedHeatmap) { countedHeatmap = true; counter("hit", "heatmaps"); }
-        $("result").scrollIntoView({ behavior: "smooth", block: "start" });
-      } catch (e) { setStatus(e.message || "Could not read this file.", true); }
+  let busy = false;
+  async function readFile(file) {
+    if (!file || busy) return;
+    busy = true;
+    setStatus(`Reading ${file.name} (${mb(file.size)} MB)…`);
+    let lastPaint = 0;
+    const onProgress = (done) => {
+      const now = performance.now();
+      if (now - lastPaint < 150) return;
+      lastPaint = now;
+      setStatus(`Reading ${file.name}… ${Math.min(100, Math.round(done / file.size * 100))}% (${mb(done)} / ${mb(file.size)} MB)`);
     };
-    r.onerror = () => setStatus("Could not read this file.", true);
-    r.readAsText(file);
+    try {
+      const chats = await parseFile(file, onProgress);
+      loadChats(chats);
+      setStatus(`Loaded ${file.name}`);
+      if (!countedHeatmap) { countedHeatmap = true; counter("hit", "heatmaps"); }
+      $("result").scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch (e) {
+      console.error(e);
+      setStatus(e && e.message ? e.message : "Could not read this file.", true);
+    } finally { busy = false; fileInput.value = ""; }
   }
   drop.addEventListener("click", () => fileInput.click());
   drop.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") fileInput.click(); });
   fileInput.addEventListener("change", () => readFile(fileInput.files[0]));
   ["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
   ["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
-  drop.addEventListener("drop", (e) => readFile(e.dataTransfer.files[0]));
-  // allow dropping anywhere on the page
+  // accept drops anywhere on the page
   window.addEventListener("dragover", (e) => e.preventDefault());
-  window.addEventListener("drop", (e) => { e.preventDefault(); if (e.target !== drop) readFile(e.dataTransfer.files[0]); });
+  window.addEventListener("drop", (e) => { e.preventDefault(); readFile(e.dataTransfer.files[0]); });
   $("chatSelect").addEventListener("change", (e) => select(+e.target.value));
+
+  // export-instruction tabs
+  document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () => {
+    document.querySelectorAll(".tab").forEach(x => x.classList.toggle("active", x === t));
+    document.querySelectorAll(".tabpane").forEach(p => p.classList.toggle("hidden", p.id !== t.dataset.pane));
+  }));
+
+  // Realistic-looking demo data: a chat that starts slow, gets intense, has quiet
+  // spells, holidays and a weekly rhythm, with day-to-day noise and rare huge days.
+  function demoCounts(seed) {
+    let s = seed >>> 0;
+    const rand = () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    const normal = () => Math.sqrt(-2 * Math.log(1 - rand())) * Math.cos(2 * Math.PI * rand());
+    const D = (y, m, d = 1) => Date.UTC(y, m - 1, d);
+    const start = D(2019, 5, 18), end = D(2026, 10, 30);
+    // keyframes of "how much we talk" (log of a typical day), jittered per run
+    const kf = [[D(2019, 5, 18), 0.6], [D(2019, 8), 1.6], [D(2019, 11), 3.1], [D(2020, 3), 3.7], [D(2020, 9), 3.4],
+      [D(2021, 2), 2.7], [D(2021, 6), 1.0], [D(2021, 9), 1.3], [D(2021, 11), 2.9], [D(2022, 6), 3.3], [D(2023, 3), 2.9],
+      [D(2024, 1), 2.3], [D(2024, 8), 3.0], [D(2025, 5), 2.5], [D(2026, 10, 30), 2.8]]
+      .map(([t, v], i) => [t + (i && i < 14 ? (rand() - 0.5) * 40 * 864e5 : 0), v + (rand() - 0.5) * 0.6]);
+    const levelAt = (t) => {
+      for (let i = 1; i < kf.length; i++) if (t <= kf[i][0]) {
+        const [t0, v0] = kf[i - 1], [t1, v1] = kf[i], x = (t - t0) / (t1 - t0);
+        return v0 + (v1 - v0) * (0.5 - 0.5 * Math.cos(Math.PI * x));
+      }
+      return kf[kf.length - 1][1];
+    };
+    const holidays = [];
+    for (let i = 0; i < 9; i++) {
+      const h0 = start + rand() * (end - start);
+      holidays.push([h0, h0 + (4 + rand() * 14) * 864e5]);
+    }
+    const week = [0.8, 1.05, 1.1, 1.05, 1.1, 1.0, 0.85]; // Sun..Sat
+    const counts = new Map();
+    let z = 0;
+    for (let t = start; t <= end; t += 864e5) {
+      z = 0.9 * z + 0.32 * normal();
+      let mu = levelAt(t) + z + Math.log(week[new Date(t).getUTCDay()]);
+      if (holidays.some(([a, b]) => t >= a && t <= b)) mu -= 2.2;
+      const pActive = 1 / (1 + Math.exp(-(mu - 0.9) * 1.7));
+      if (rand() >= pActive) continue;
+      let n = Math.round(Math.exp(mu + 0.6 * normal()));
+      if (rand() < 0.015) n = Math.round(n * (2 + rand() * 3));
+      if (n > 0) counts.set(new Date(t).toISOString().slice(0, 10), n);
+    }
+    return counts;
+  }
 
   $("demo").addEventListener("click", (e) => {
     e.preventDefault();
-    const messages = [];
-    const start = Date.UTC(2021, 2, 10), end = Date.UTC(2026, 9, 20);
-    let mood = 1;
-    for (let t = start; t <= end; t += 864e5) {
-      mood = Math.max(0, Math.min(3, mood + (Math.random() - 0.5) * 0.6));
-      if (Math.random() < 0.35 * mood) {
-        const n = Math.floor(Math.random() ** 2 * 120 * mood) + 1;
-        const d = new Date(t).toISOString().slice(0, 10);
-        for (let k = 0; k < n; k++) messages.push({ type: "message", date: d + "T12:00:00" });
-      }
-    }
-    loadJSON({ name: "Demo chat", messages });
+    const seed = +(new URLSearchParams(location.search).get("seed")) || (Math.random() * 2 ** 32);
+    loadChats([{ name: "Demo chat", counts: demoCounts(seed) }]);
     setStatus("Loaded demo data");
   });
 
@@ -298,7 +522,7 @@
       [total(state.current).toLocaleString(), "messages"],
       [c.size.toLocaleString(), "active days"],
       [best[1].toLocaleString(), `busiest day · ${fmt(best[0])}`],
-      [longest.toLocaleString() + " days", "longest streak"],
+      [longest.toLocaleString() + (longest === 1 ? " day" : " days"), "longest streak"],
       [`${days[0].slice(0, 4)}–${days[days.length - 1].slice(0, 4)}`, "span"],
     ];
     $("stats").innerHTML = items.map(([b, s]) => `<div class="stat"><b>${b}</b><span>${s}</span></div>`).join("");

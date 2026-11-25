@@ -71,6 +71,11 @@ https://abacus.jasoncameron.dev/get/nimafo.github.io/funviz-visits
 
 The counter is off when the page is opened locally (`file://` or `localhost`), so testing doesn't inflate it.
 
+## Features to add next 
+- It should be possible to combine message counts from both WA and Telegram since people might use both.
+- Showing call history in minutes.
+- Add Facebook Messenger readability.
+
 ## License
 
 MIT
